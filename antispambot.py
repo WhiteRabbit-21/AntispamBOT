@@ -1,24 +1,23 @@
 import os
+import asyncio
 import logging
 from aiogram import Bot, Dispatcher, types, Router
 from aiogram.enums import ChatType
 from aiogram.filters import CommandStart
-from aiohttp import web
+from dotenv import load_dotenv
 
 # --- Настройки ---
-TOKEN = os.getenv("TOKEN")
-WEBHOOK_PATH = "/webhook"
-WEBHOOK_URL = os.getenv("WEBHOOK_URL")
-PORT = int(os.getenv("PORT", 8000))
-
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-
+load_dotenv(dotenv_path=os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env"))
+TOKEN = os.getenv("TOKEN")  # переменная окружения на Railway
+print("TOKEN:", TOKEN)
+if not TOKEN:
+    raise ValueError("❌ TOKEN не найден! Проверь переменные окружения.")
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 router = Router()
 dp.include_router(router)
 
-# --- Список спам-слов ---
+# --- Список "спам-слов" ---
 SPAM_WORDS = [
     "крипто", "нфт", "казино", "ставки", "заработок",
     "crypto", "nft", "casino", "bet", "earn money"
@@ -27,7 +26,10 @@ SPAM_WORDS = [
 # --- Команда /start ---
 @router.message(CommandStart())
 async def cmd_start(message: types.Message):
-    await message.answer("👋 Привет! Я бот, который удаляет сообщения по заданным словам. Добавь меня в группу и дай права администратора.")
+    await message.answer(
+        "👋 Привет! Я бот, который удаляет сообщения по заданным словам. "
+        "Добавь меня в группу и дай права администратора."
+    )
     logging.info("Бот получил команду /start от %s", message.from_user.id)
 
 # --- Обработка всех сообщений ---
@@ -45,33 +47,18 @@ async def handle_message(message: types.Message):
             chat_member = await bot.get_chat_member(message.chat.id, (await bot.get_me()).id)
             if chat_member.can_delete_messages:
                 await message.delete()
-                logging.info("🗑 Сообщение от @%s удалено", username)
+                logging.info("🗑 Сообщение от @%s удалено (содержало спам-слово)", username)
             else:
-                logging.warning("⚠️ Бот не имеет прав на удаление сообщений")
+                logging.warning("⚠️ Бот не имеет прав на удаление сообщений в чате")
         except Exception as e:
             logging.error("Ошибка при удалении сообщения: %s", e)
 
-# --- Webhook setup ---
-async def on_startup(app: web.Application):
-    await bot.set_webhook(WEBHOOK_URL)
-    logging.info(f"Webhook установлен: {WEBHOOK_URL}")
-
-async def on_shutdown(app: web.Application):
-    logging.info("Удаляем webhook...")
-    await bot.delete_webhook()
-    await bot.session.close()
-
-async def handle(request: web.Request):
-    update = types.Update(**await request.json())
-    await dp.process_update(update)
-    return web.Response()
-
-# --- Aiohttp server ---
-app = web.Application()
-app.router.add_post(WEBHOOK_PATH, handle)
-app.on_startup.append(on_startup)
-app.on_shutdown.append(on_shutdown)
+# --- Запуск бота ---
+async def main():
+    logging.info("🤖 AntiSpam Bot запущен и слушает сообщения...")
+    await dp.start_polling(bot)
 
 if __name__ == "__main__":
-    logging.info("Запуск бота на Webhook...")
-    web.run_app(app, host="0.0.0.0", port=PORT)
+    if hasattr(asyncio, "WindowsSelectorEventLoopPolicy"):
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+    asyncio.run(main())
