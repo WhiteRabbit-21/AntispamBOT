@@ -1,11 +1,15 @@
-import asyncio
+import os
 import logging
 from aiogram import Bot, Dispatcher, types, Router
 from aiogram.enums import ChatType
 from aiogram.filters import CommandStart
+from aiohttp import web
 
 # --- Настройки ---
-TOKEN = "8299945273:AAGxRoQTKR2mTrBjin5xJAHe3ny8eNQ3e9U"
+TOKEN = os.getenv("TOKEN")
+WEBHOOK_PATH = "/webhook"
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")
+PORT = int(os.getenv("PORT", 8000))
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
@@ -14,10 +18,10 @@ dp = Dispatcher()
 router = Router()
 dp.include_router(router)
 
-# --- Список "спам-слов" ---
+# --- Список спам-слов ---
 SPAM_WORDS = [
-    "крипто", "нфт", "казино", "ставки", "заработок",  # кириллица
-    "crypto", "nft", "casino", "bet", "earn money"     # латиница
+    "крипто", "нфт", "казино", "ставки", "заработок",
+    "crypto", "nft", "casino", "bet", "earn money"
 ]
 
 # --- Команда /start ---
@@ -36,24 +40,38 @@ async def handle_message(message: types.Message):
     text = (message.text or message.caption or "").lower()
     username = message.from_user.username or f"id:{message.from_user.id}"
 
-    # --- Проверяем наличие спам-слов ---
     if any(word in text for word in SPAM_WORDS):
         try:
             chat_member = await bot.get_chat_member(message.chat.id, (await bot.get_me()).id)
             if chat_member.can_delete_messages:
                 await message.delete()
-                logging.info("🗑 Сообщение от @%s удалено (содержало спам-слово)", username)
+                logging.info("🗑 Сообщение от @%s удалено", username)
             else:
-                logging.warning("⚠️ Бот не имеет прав на удаление сообщений в чате")
+                logging.warning("⚠️ Бот не имеет прав на удаление сообщений")
         except Exception as e:
             logging.error("Ошибка при удалении сообщения: %s", e)
 
-# --- Запуск бота ---
-async def main():
-    logging.info("🤖 AntiSpam Bot запущен и слушает сообщения...")
-    await dp.start_polling(bot)
+# --- Webhook setup ---
+async def on_startup(app: web.Application):
+    await bot.set_webhook(WEBHOOK_URL)
+    logging.info(f"Webhook установлен: {WEBHOOK_URL}")
+
+async def on_shutdown(app: web.Application):
+    logging.info("Удаляем webhook...")
+    await bot.delete_webhook()
+    await bot.session.close()
+
+async def handle(request: web.Request):
+    update = types.Update(**await request.json())
+    await dp.process_update(update)
+    return web.Response()
+
+# --- Aiohttp server ---
+app = web.Application()
+app.router.add_post(WEBHOOK_PATH, handle)
+app.on_startup.append(on_startup)
+app.on_shutdown.append(on_shutdown)
 
 if __name__ == "__main__":
-    if hasattr(asyncio, "WindowsSelectorEventLoopPolicy"):
-        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-    asyncio.run(main())
+    logging.info("Запуск бота на Webhook...")
+    web.run_app(app, host="0.0.0.0", port=PORT)
